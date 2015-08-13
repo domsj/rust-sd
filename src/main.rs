@@ -12,9 +12,12 @@ use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::vec::*;
-use std::ops::IndexMut;
-use std::ops::Range;
+use std::sync::{Arc, Mutex};
+
 // TODO use mio non blocking IO
+
+extern crate rocksdb;
+use rocksdb::{RocksDB, Writable, WriteBatch};
 
 extern crate byteorder;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -61,7 +64,7 @@ fn read_bytes_option(reader : &mut Read) -> Option<Vec<u8>> {
     }
 }
 
-fn handle_client(mut stream: TcpStream) {
+fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
     // TODO wrap TcpStream with io::BufReader
 
     println!("1");
@@ -96,21 +99,32 @@ fn handle_client(mut stream: TcpStream) {
 
     // TODO loop die messages leest en afhandelt
     loop {
-        let msg = read_bytes(&mut stream);
+        // let msg = read_bytes(&mut stream);
+        let _ = db.lock().unwrap().put(b"my key", b"my key");
+        db.lock().unwrap().get(b"my key");
+        let batch = WriteBatch::new();
+        batch.put(b"key", b"value").unwrap();
+        db.lock().unwrap().write(batch).unwrap();
     }
 }
+
 
 fn main() {
 
     let listener = TcpListener::bind("127.0.0.1:8090").unwrap();
 
+    let db = RocksDB::open_default("/path/for/rocksdb/storage").unwrap();
+    let dbx = Arc::new(Mutex::new(db));
+    // hmm, via channel alles naar rocksdb agent pushen?
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let dbx = dbx.clone();
                 thread::spawn(move|| {
                     // connection succeeded
                     println!("Hello, world!");
-                    handle_client(stream)
+                    handle_client(stream, dbx)
                 });
             }
             Err(e) => { /* connection failed */ }
