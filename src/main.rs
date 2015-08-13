@@ -31,13 +31,7 @@ fn read_bytes_raw(reader : &mut Read, size : usize) -> Vec<u8> {
         println!("cuc1 {} {}", read, size);
         let read_extra =
             reader
-            .read(
-                &mut res
-                    // TODO
-                // &mut res.index_mut(
-                //     Range{ start : read,
-                //            end   : (size - read - 1) })
-                    )
+            .read(&mut res[read..])
             .unwrap();
         println!("{}", read_extra);
         read += read_extra;
