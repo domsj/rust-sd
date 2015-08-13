@@ -82,16 +82,16 @@ fn handle_client(mut stream: TcpStream) {
     println!("3");
     let lido = read_bytes_option(&mut stream);
 
-    let long_id = "the_hardcoded_id".to_string().into_bytes();
+    let long_id = b"the_hardcoded_id";
     stream.write_u32::<LittleEndian>(long_id.len() as u32).unwrap();
-    let written = stream.write(&long_id).unwrap();
+    let written = stream.write(long_id).unwrap();
     assert!(written == long_id.len());
     println!("4");
 
     match lido {
         None => (),
         Some(lid) =>
-            if long_id == lid {
+            if lid == long_id {
                 ()
             } else {
                 assert!(false)
