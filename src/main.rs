@@ -64,9 +64,12 @@ fn read_bytes_option(reader : &mut Read) -> Option<Vec<u8>> {
     }
 }
 
-fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
-    // TODO wrap TcpStream with io::BufReader
+fn write_bytes(writer : &mut Write, bytes : &[u8]) {
+    writer.write_u32::<LittleEndian>(bytes.len() as u32).unwrap();
+    writer.write_all(bytes).unwrap();
+}
 
+fn prologue(mut stream: &mut TcpStream) {
     println!("1");
     let magic = b"aLbA";
     let magic1 = read_bytes_raw(&mut stream, 4);
@@ -80,10 +83,6 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
     let lido = read_bytes_option(&mut stream);
 
     let long_id = b"the_hardcoded_id";
-    stream.write_u32::<LittleEndian>(long_id.len() as u32).unwrap();
-    let written = stream.write(long_id).unwrap();
-    assert!(written == long_id.len());
-    println!("4");
 
     match lido {
         None => (),
@@ -91,15 +90,51 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
             if lid == long_id {
                 ()
             } else {
+                // TODO reply long id
                 assert!(false)
             }
     };
 
+    stream.write_u32::<LittleEndian>(0).unwrap();
+    write_bytes(stream, long_id);
+    stream.flush().unwrap();
+
     println!("5");
+}
+
+enum Error {
+    UnknownOperation = 4
+}
+
+fn reply_unknown(mut stream : &mut TcpStream) {
+    println!("replying unknown!");
+    stream.write_u32::<LittleEndian>(4).unwrap();
+    stream.write_u32::<LittleEndian>(Error::UnknownOperation as u32).unwrap();
+    stream.flush().unwrap();
+}
+
+fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
+    // TODO wrap TcpStream with io::BufReader
+
+    prologue(&mut stream);
+
+    println!("6");
 
     // TODO loop die messages leest en afhandelt
     loop {
-        // let msg = read_bytes(&mut stream);
+        let msg = read_bytes(&mut stream);
+        println!("7");
+        match msg[0] {
+            1 => reply_unknown(&mut stream),  // Range
+            2 => reply_unknown(&mut stream),  // MultiGet
+            3 => reply_unknown(&mut stream),  // Apply
+            4 => reply_unknown(&mut stream),  // RangeEntries
+            5 => reply_unknown(&mut stream),  // Statistics
+            6 => reply_unknown(&mut stream),  // SetFull
+            7 => reply_unknown(&mut stream),  // GetVersion
+            8 => reply_unknown(&mut stream),  // MultiGet2
+            _ => reply_unknown(&mut stream)
+        };
         let _ = db.lock().unwrap().put(b"my key", b"my key");
         db.lock().unwrap().get(b"my key");
         let batch = WriteBatch::new();
@@ -108,12 +143,11 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
     }
 }
 
-
 fn main() {
 
     let listener = TcpListener::bind("127.0.0.1:8090").unwrap();
 
-    let db = RocksDB::open_default("/path/for/rocksdb/storage").unwrap();
+    let db = RocksDB::open_default("/tmp/asd_rocks").unwrap();
     let dbx = Arc::new(Mutex::new(db));
     // hmm, via channel alles naar rocksdb agent pushen?
 
