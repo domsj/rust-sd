@@ -1,9 +1,8 @@
-// how to start?
-
-// - link rocksdb binding
-// - open server socket
-// - figure out serialization
-// - brute strategy: blocking write to rocksdb
+// TODO
+// - use mio non blocking IO (mioco)
+// - rocksdb binding error handling could be better for get call?
+// - extract (de)serialization methods to separate file
+// - implement more asd methods
 
 use std::option::Option;
 use std::io::prelude::*;
@@ -11,9 +10,7 @@ use std::io::{Cursor};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::vec::*;
-use std::sync::{Arc, Mutex};
-
-// TODO use mio non blocking IO
+use std::sync::{Arc};
 
 extern crate rocksdb;
 use rocksdb::{RocksDB, RocksDBResult, Writable, WriteBatch};
@@ -166,7 +163,7 @@ fn read_bytes_list(reader : &mut Read) -> Result<Vec<Vec<u8>>> {
     Ok(res)
 }
 
-fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) -> Result<()> {
+fn handle_client(mut stream: TcpStream, db: Arc<RocksDB>) -> Result<()> {
     // TODO wrap TcpStream with io::BufReader
 
     try!(prologue(&mut stream));
@@ -183,7 +180,6 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) -> Result<()> {
                 match operation {
                     Operation::MultiGet => {
                         let keys = try!(read_bytes_list(&mut cur));
-                        let db = db.lock().unwrap();
                         let mut res = Vec::new();
                         for key in keys {
                             res.push(match db.get(&key) {
@@ -197,11 +193,11 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) -> Result<()> {
                     Operation::Range => reply_unknown(&mut stream)
                 }
         };
-        let _ = db.lock().unwrap().put(b"my key", b"my key");
-        db.lock().unwrap().get(b"my key");
+        let _ = db.put(b"my key", b"my key");
+        db.get(b"my key");
         let batch = WriteBatch::new();
         batch.put(b"key", b"value").unwrap();
-        db.lock().unwrap().write(batch).unwrap();
+        db.write(batch).unwrap();
     }
 }
 
@@ -210,7 +206,7 @@ fn main() {
     let listener = TcpListener::bind("127.0.0.1:8090").unwrap();
 
     let db = RocksDB::open_default("/tmp/asd_rocks").unwrap();
-    let dbx = Arc::new(Mutex::new(db));
+    let dbx = Arc::new(db);
     // hmm, via channel alles naar rocksdb agent pushen?
 
     for stream in listener.incoming() {
