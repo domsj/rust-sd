@@ -5,9 +5,7 @@
 // - figure out serialization
 // - brute strategy: blocking write to rocksdb
 
-// TODO remove unwrap usages ... proper error handling!
-// (there was a good blog post available about that)
-
+use std::option::Option;
 use std::io::prelude::*;
 use std::io::{Cursor};
 use std::net::{TcpListener, TcpStream};
@@ -18,13 +16,49 @@ use std::sync::{Arc, Mutex};
 // TODO use mio non blocking IO
 
 extern crate rocksdb;
-use rocksdb::{RocksDB, Writable, WriteBatch};
+use rocksdb::{RocksDB, RocksDBResult, Writable, WriteBatch};
 
 extern crate byteorder;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-fn read_bytes_raw(reader : &mut Read, size : usize) -> Vec<u8> {
-    // TODO return result
+#[derive(Debug)]
+enum Error {
+    ParseError,
+    ByteorderError(byteorder::Error),
+    IoError(std::io::Error)
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            Error::ParseError => write!(f, "Parse error"),
+            Error::IoError(ref err) => write!(f, "IO error: {}", err),
+            Error::ByteorderError(ref err) => write!(f, "ByteorderError: {}", err),
+        }
+    }
+}
+impl From<std::io::Error> for Error {
+    fn from(err : std::io::Error) -> Error {
+        Error::IoError(err)
+    }
+}
+impl From<byteorder::Error> for Error {
+    fn from(err : byteorder::Error) -> Error {
+        Error::ByteorderError(err)
+    }
+}
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::ParseError => "parse error!",
+            Error::IoError(ref err) => std::error::Error::description(err),
+            Error::ByteorderError(ref err) => byteorder::Error::description(err),
+        }
+    }
+}
+type Result<T> = std::result::Result<T, Error>;
+
+fn read_bytes_raw(reader : &mut Read, size : usize) ->
+    Result<Vec<u8>> {
 
     // hmm, there's got to be a better way
     let mut res = Vec::<u8>::with_capacity(size);
@@ -33,35 +67,32 @@ fn read_bytes_raw(reader : &mut Read, size : usize) -> Vec<u8> {
     let mut read = 0;
     while read < size {
         println!("cuc1 {} {}", read, size);
-        let read_extra =
-            reader
-            .read(&mut res[read..])
-            .unwrap();
+        let read_extra = try!(reader.read(&mut res[read..]));
         println!("{}", read_extra);
         read += read_extra;
     };
-    res
+    Ok(res)
 }
 
-fn read_bytes(reader : &mut Read) -> Vec<u8> {
-    let len = reader.read_u32::<LittleEndian>().unwrap();
+fn read_bytes(reader : &mut Read) -> Result<Vec<u8>> {
+    let len = try!(reader.read_u32::<LittleEndian>());
     read_bytes_raw(reader, len as usize)
 }
 
-fn read_bool(reader : &mut Read) -> bool {
+fn read_bool(reader : &mut Read) -> Result<bool> {
     // TODO return result
-    match reader.read_u8().unwrap() {
-        0 => false,
-        1 => true,
-        _ => true               // TODO Error
+    match try!(reader.read_u8()) {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(Error::ParseError)
     }
 }
 
-fn read_bytes_option(reader : &mut Read) -> Option<Vec<u8>> {
-    if read_bool(reader) {
-        Some(read_bytes(reader))
+fn read_bytes_option(reader : &mut Read) -> Result<Option<Vec<u8>>> {
+    if try!(read_bool(reader)) {
+        Ok(Some(try!(read_bytes(reader))))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -70,10 +101,10 @@ fn write_bytes(writer : &mut Write, bytes : &[u8]) {
     writer.write_all(bytes).unwrap();
 }
 
-fn prologue(mut stream: &mut TcpStream) {
+fn prologue(mut stream: &mut TcpStream) -> Result<()> {
     println!("1");
     let magic = b"aLbA";
-    let magic1 = read_bytes_raw(&mut stream, 4);
+    let magic1 = read_bytes_raw(&mut stream, 4).ok().unwrap();
     assert!(magic1 == magic);
 
     println!("2");
@@ -81,7 +112,7 @@ fn prologue(mut stream: &mut TcpStream) {
     assert!(version == 1);
 
     println!("3");
-    let lido = read_bytes_option(&mut stream);
+    let lido = try!(read_bytes_option(&mut stream));
 
     let long_id = b"the_hardcoded_id";
 
@@ -101,16 +132,17 @@ fn prologue(mut stream: &mut TcpStream) {
     stream.flush().unwrap();
 
     println!("5");
+    Ok(())
 }
 
-enum Error {
+enum AsdError {
     UnknownOperation = 4
 }
 
 fn reply_unknown(mut stream : &mut TcpStream) {
     println!("replying unknown!");
     stream.write_u32::<LittleEndian>(4).unwrap();
-    stream.write_u32::<LittleEndian>(Error::UnknownOperation as u32).unwrap();
+    stream.write_u32::<LittleEndian>(AsdError::UnknownOperation as u32).unwrap();
     stream.flush().unwrap();
 }
 
@@ -125,24 +157,24 @@ enum_from_primitive! {
     }
 }
 
-fn read_bytes_list(reader : &mut Read) -> Vec<Vec<u8>> {
+fn read_bytes_list(reader : &mut Read) -> Result<Vec<Vec<u8>>> {
     let len = reader.read_u32::<LittleEndian>().unwrap();
     let mut res = Vec::new();
     for _ in 0..len {
-        res.push(read_bytes(reader))
+        res.push(try!(read_bytes(reader)))
     }
-    res
+    Ok(res)
 }
 
-fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
+fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) -> Result<()> {
     // TODO wrap TcpStream with io::BufReader
 
-    prologue(&mut stream);
+    try!(prologue(&mut stream));
 
     println!("6");
 
     loop {
-        let msg = read_bytes(&mut stream);
+        let msg = try!(read_bytes(&mut stream));
         let mut cur = Cursor::new(msg);
         println!("7");
         match Operation::from_u8(cur.read_u8().unwrap()) {
@@ -150,7 +182,16 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
             Some(operation) =>
                 match operation {
                     Operation::MultiGet => {
-                        let keys = read_bytes_list(&mut cur);
+                        let keys = try!(read_bytes_list(&mut cur));
+                        let db = db.lock().unwrap();
+                        let mut res = Vec::new();
+                        for key in keys {
+                            res.push(match db.get(&key) {
+                                RocksDBResult::Error(e) => panic!(e),
+                                RocksDBResult::None => Option::None,
+                                RocksDBResult::Some(s) => Option::Some(s)
+                            });
+                        }
                         reply_unknown(&mut stream)
                     },
                     Operation::Range => reply_unknown(&mut stream)
@@ -182,7 +223,7 @@ fn main() {
                     handle_client(stream, dbx)
                 });
             }
-            Err(e) => { /* connection failed */ }
+            Err(_) => { /* connection failed */ }
         }
     }
 
