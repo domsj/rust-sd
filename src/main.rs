@@ -9,6 +9,7 @@
 // (there was a good blog post available about that)
 
 use std::io::prelude::*;
+use std::io::{Cursor};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::vec::*;
@@ -124,6 +125,14 @@ enum_from_primitive! {
     }
 }
 
+fn read_bytes_list(reader : &mut Read) -> Vec<Vec<u8>> {
+    let len = reader.read_u32::<LittleEndian>().unwrap();
+    let mut res = Vec::new();
+    for _ in 0..len {
+        res.push(read_bytes(reader))
+    }
+    res
+}
 
 fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
     // TODO wrap TcpStream with io::BufReader
@@ -134,11 +143,18 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
 
     loop {
         let msg = read_bytes(&mut stream);
+        let mut cur = Cursor::new(msg);
         println!("7");
-        match Operation::from_u8(msg[0]) {
+        match Operation::from_u8(cur.read_u8().unwrap()) {
             None => reply_unknown(&mut stream),
-            Some(Operation::MultiGet) => reply_unknown(&mut stream),
-            Some(Operation::Range) => reply_unknown(&mut stream)
+            Some(operation) =>
+                match operation {
+                    Operation::MultiGet => {
+                        let keys = read_bytes_list(&mut cur);
+                        reply_unknown(&mut stream)
+                    },
+                    Operation::Range => reply_unknown(&mut stream)
+                }
         };
         let _ = db.lock().unwrap().put(b"my key", b"my key");
         db.lock().unwrap().get(b"my key");
