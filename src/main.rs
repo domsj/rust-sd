@@ -85,12 +85,33 @@ fn read_bool(reader : &mut Read) -> Result<bool> {
     }
 }
 
-fn read_bytes_option(reader : &mut Read) -> Result<Option<Vec<u8>>> {
+fn read_option<F, T>(reader: &mut Read, read_t: F)
+               -> Result<Option<T>>
+    where F : Fn(&mut Read) -> Result<T> {
     if try!(read_bool(reader)) {
-        Ok(Some(try!(read_bytes(reader))))
+        Ok(Some(try!(read_t(reader))))
     } else {
         Ok(None)
     }
+
+}
+fn read_bytes_option(reader : &mut Read) -> Result<Option<Vec<u8>>> {
+    read_option(reader, read_bytes)
+}
+
+fn read_list<F, T>(reader: &mut Read, read_t: F)
+                   -> Result<Vec<T>>
+    where F : Fn(&mut Read) -> Result<T> {
+    let len = reader.read_u32::<LittleEndian>().unwrap();
+    let mut res = Vec::new();
+    for _ in 0..len {
+        res.push(try!(read_t(reader)))
+    }
+    Ok(res)    
+}
+
+fn read_bytes_list(reader : &mut Read) -> Result<Vec<Vec<u8>>> {
+    read_list(reader, read_bytes)
 }
 
 fn write_bytes(writer : &mut Write, bytes : &[u8]) {
@@ -152,15 +173,6 @@ enum_from_primitive! {
         Range = 1,
         MultiGet = 2
     }
-}
-
-fn read_bytes_list(reader : &mut Read) -> Result<Vec<Vec<u8>>> {
-    let len = reader.read_u32::<LittleEndian>().unwrap();
-    let mut res = Vec::new();
-    for _ in 0..len {
-        res.push(try!(read_bytes(reader)))
-    }
-    Ok(res)
 }
 
 fn handle_client(mut stream: TcpStream, db: Arc<RocksDB>) -> Result<()> {
