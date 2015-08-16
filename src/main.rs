@@ -113,6 +113,18 @@ fn reply_unknown(mut stream : &mut TcpStream) {
     stream.flush().unwrap();
 }
 
+#[macro_use] extern crate enum_primitive;
+extern crate num;
+use num::FromPrimitive;
+
+enum_from_primitive! {
+    enum Operation {
+        Range = 1,
+        MultiGet = 2
+    }
+}
+
+
 fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
     // TODO wrap TcpStream with io::BufReader
 
@@ -120,20 +132,13 @@ fn handle_client(mut stream: TcpStream, db: Arc<Mutex<RocksDB>>) {
 
     println!("6");
 
-    // TODO loop die messages leest en afhandelt
     loop {
         let msg = read_bytes(&mut stream);
         println!("7");
-        match msg[0] {
-            1 => reply_unknown(&mut stream),  // Range
-            2 => reply_unknown(&mut stream),  // MultiGet
-            3 => reply_unknown(&mut stream),  // Apply
-            4 => reply_unknown(&mut stream),  // RangeEntries
-            5 => reply_unknown(&mut stream),  // Statistics
-            6 => reply_unknown(&mut stream),  // SetFull
-            7 => reply_unknown(&mut stream),  // GetVersion
-            8 => reply_unknown(&mut stream),  // MultiGet2
-            _ => reply_unknown(&mut stream)
+        match Operation::from_u8(msg[0]) {
+            None => reply_unknown(&mut stream),
+            Some(Operation::MultiGet) => reply_unknown(&mut stream),
+            Some(Operation::Range) => reply_unknown(&mut stream)
         };
         let _ = db.lock().unwrap().put(b"my key", b"my key");
         db.lock().unwrap().get(b"my key");
@@ -167,4 +172,3 @@ fn main() {
 
     drop(listener)
 }
-

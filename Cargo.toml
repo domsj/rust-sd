@@ -6,3 +6,5 @@ authors = ["Jan Doms <jan.doms@gmail.com>"]
 [dependencies]
 byteorder = "0.3.11"
 rocksdb = "0.1.0"
+enum_primitive = "0.1.0"
+num = "0.1.26"
