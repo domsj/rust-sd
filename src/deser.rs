@@ -103,12 +103,12 @@ pub fn read_bytes_option(reader : &mut Read) -> Result<Option<Vec<u8>>> {
 fn read_list<F, T>(reader: &mut Read, read_t: F)
                    -> Result<Vec<T>>
     where F : Fn(&mut Read) -> Result<T> {
-    let len = reader.read_u32::<LittleEndian>().unwrap();
-    let mut res = Vec::new();
-    for _ in 0..len {
-        res.push(try!(read_t(reader)))
-    }
-    Ok(res)    
+        let len = reader.read_u32::<LittleEndian>().unwrap();
+        let mut res = Vec::<T>::with_capacity(len as usize);
+        for _ in 0..len {
+            res.push(try!(read_t(reader)))
+        }
+        Ok(res)
 }
 
 pub fn read_bytes_list(reader : &mut Read) -> Result<Vec<Vec<u8>>> {

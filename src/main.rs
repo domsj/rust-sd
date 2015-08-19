@@ -83,7 +83,7 @@ fn handle_multiget(mut stream: &mut TcpStream,
                    mut cur: &mut Read,
                    db: &RocksDB) -> Result<()> {
     let keys = try!(deser::read_bytes_list(&mut cur));
-    let mut res : Vec<Option<_>> = Vec::new();
+    let mut res = Vec::with_capacity(keys.len());
     // let db = db.snapshot();
     // TODO snapshot meegeven in readoptions
     // voor de get call (needs changes in the
