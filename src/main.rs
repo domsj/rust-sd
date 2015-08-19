@@ -43,9 +43,9 @@ fn prologue(mut stream: &mut TcpStream) -> Result<()> {
             }
     };
 
-    deser::write_u32(stream, 0).unwrap();
-    deser::write_bytes(stream, long_id);
-    stream.flush().unwrap();
+    try!(deser::write_u32(stream, &0));
+    try!(deser::write_bytes(stream, long_id));
+    try!(stream.flush());
 
     println!("5");
     Ok(())
@@ -57,9 +57,13 @@ enum AsdError {
 
 fn reply_unknown(mut stream : &mut TcpStream) -> Result<()> {
     println!("replying unknown!");
-    try!(deser::write_u32(stream, 4));
+    try!(deser::write_bytes(
+        stream,
+        &try!(deser::serialize(deser::write_u32,
+                               &(AsdError::UnknownOperation as u32)))));
+    try!(deser::write_u32(stream, &4));
     try!(deser::write_u32(stream,
-                          AsdError::UnknownOperation as u32));
+                          &(AsdError::UnknownOperation as u32)));
     try!(stream.flush());
     Ok(())
 }
@@ -94,8 +98,21 @@ fn handle_multiget(mut stream: &mut TcpStream,
             RocksDBResult::None => Option::None,
             RocksDBResult::Some(s) => Option::Some(s)
         });
-    }
-    reply_unknown(&mut stream)
+    };
+
+    let mut buf = Vec::new();
+    try!(deser::write_u32(&mut buf, &0));
+    // try!(deser::write_list(&mut buf,
+    //                        | writer, &rv | {
+    //                            deser::write_option(
+    //                                writer,
+    //                                deser::write_bytes,
+    //                                &rv)
+    //                        },
+    //                        &res2));
+
+    try!(deser::write_bytes(stream, &buf));
+    Ok(())
 }
 
 fn handle_client(mut stream: TcpStream, db: Arc<RocksDB>) -> Result<()> {
@@ -135,7 +152,6 @@ fn main() {
 
     let db = RocksDB::open_default("/tmp/asd_rocks").unwrap();
     let dbx = Arc::new(db);
-    // hmm, via channel alles naar rocksdb agent pushen?
 
     for stream in listener.incoming() {
         match stream {
