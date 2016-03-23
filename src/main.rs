@@ -4,7 +4,6 @@
 // - extract (de)serialization methods to separate file
 // - implement more asd methods
 
-use std::option::Option;
 use std::io::prelude::*;
 use std::io::{Cursor};
 use std::net::{TcpListener, TcpStream};
@@ -12,7 +11,7 @@ use std::thread;
 use std::sync::{Arc};
 
 extern crate rocksdb;
-use rocksdb::{RocksDB, RocksDBResult, Writable, WriteBatch};
+use rocksdb::{DB, Writable, WriteBatch};
 
 mod deser;
 use deser::*;
@@ -81,7 +80,7 @@ enum_from_primitive! {
 
 fn handle_multiget(mut stream: &mut TcpStream,
                    mut cur: &mut Read,
-                   db: &RocksDB) -> Result<()> {
+                   db: &DB) -> Result<()> {
     let keys = try!(deser::read_bytes_list(&mut cur));
     let mut res = Vec::with_capacity(keys.len());
     // let db = db.snapshot();
@@ -94,9 +93,8 @@ fn handle_multiget(mut stream: &mut TcpStream,
     // multiget variant
     for key in keys {
         res.push(match db.get(&key) {
-            RocksDBResult::Error(e) => panic!(e),
-            RocksDBResult::None => Option::None,
-            RocksDBResult::Some(s) => Option::Some(s)
+            Err(e) => panic!(e),
+            Ok(v) => v
         });
     };
 
@@ -115,7 +113,7 @@ fn handle_multiget(mut stream: &mut TcpStream,
     Ok(())
 }
 
-fn handle_client(mut stream: TcpStream, db: Arc<RocksDB>) -> Result<()> {
+fn handle_client(mut stream: TcpStream, db: Arc<DB>) -> Result<()> {
     // TODO wrap TcpStream with io::BufReader
 
     try!(prologue(&mut stream));
@@ -139,7 +137,7 @@ fn handle_client(mut stream: TcpStream, db: Arc<RocksDB>) -> Result<()> {
                 }
         });
         let _ = db.put(b"my key", b"my key");
-        db.get(b"my key");
+        let _ = db.get(b"my key");
         let batch = WriteBatch::new();
         batch.put(b"key", b"value").unwrap();
         db.write(batch).unwrap();
@@ -150,7 +148,7 @@ fn main() {
 
     let listener = TcpListener::bind("127.0.0.1:8090").unwrap();
 
-    let db = RocksDB::open_default("/tmp/asd_rocks").unwrap();
+    let db = DB::open_default("/tmp/asd_rocks").unwrap();
     let dbx = Arc::new(db);
 
     for stream in listener.incoming() {

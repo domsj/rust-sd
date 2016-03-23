@@ -119,36 +119,36 @@ pub fn write_u32(writer: &mut Write, i: &u32) -> Result<()> {
     Ok(try!(writer.write_u32::<LittleEndian>(*i)))
 }
 
-pub fn write_bool(writer: &mut Write, b: &bool) -> Result<()> {
-    try!(writer.write_u8(if *b { 1 } else { 0 }));
-    Ok(())
-}
+// pub fn write_bool(writer: &mut Write, b: &bool) -> Result<()> {
+//     try!(writer.write_u8(if *b { 1 } else { 0 }));
+//     Ok(())
+// }
 
-pub fn write_option<F, T>(writer: &mut Write,
-                          write_t: F,
-                          item_o: &Option<&T>) -> Result<()>
-    where F: Fn(&mut Write, &T) -> Result<()>
-{
-    match *item_o {
-        Option::None => write_bool(writer, &false),
-        Option::Some(ref t) => {
-            try!(write_bool(writer, &true));
-            write_t(writer, t)
-        }
-    }
-}
+// pub fn write_option<F, T>(writer: &mut Write,
+//                           write_t: F,
+//                           item_o: &Option<&T>) -> Result<()>
+//     where F: Fn(&mut Write, &T) -> Result<()>
+// {
+//     match *item_o {
+//         Option::None => write_bool(writer, &false),
+//         Option::Some(ref t) => {
+//             try!(write_bool(writer, &true));
+//             write_t(writer, t)
+//         }
+//     }
+// }
 
-pub fn write_list<F, T>(writer: &mut Write,
-                        write_t: F,
-                        items: &Vec<&T>) -> Result<()>
-    where F: Fn(&mut Write, &T) -> Result<()>
-{
-    try!(write_u32(writer, &(items.len() as u32)));
-    for t in items {
-        try!(write_t(writer, t))
-    };
-    Ok(())
-}
+// pub fn write_list<F, T>(writer: &mut Write,
+//                         write_t: F,
+//                         items: &Vec<&T>) -> Result<()>
+//     where F: Fn(&mut Write, &T) -> Result<()>
+// {
+//     try!(write_u32(writer, &(items.len() as u32)));
+//     for t in items {
+//         try!(write_t(writer, t))
+//     };
+//     Ok(())
+// }
 
 pub fn write_bytes(writer : &mut Write, bytes : &[u8]) -> Result<()> {
     try!(writer.write_u32::<LittleEndian>(bytes.len() as u32));
@@ -161,4 +161,40 @@ pub fn serialize<F, T>(serializer: F, item: &T) -> Result<Vec<u8>>
         let mut buf = Vec::new();
         try!(serializer(&mut buf, item));
         Ok(buf)
+}
+
+trait Serializable {
+    fn serialize(&self, &mut Write) -> Result<()>;
+}
+
+impl Serializable for u32 {
+    fn serialize(&self, writer : &mut Write) -> Result<()> {
+        write_u32(writer, self)
+    }
+}
+
+impl<'a> Serializable for &'a[u8] {
+    fn serialize(&self, writer: &mut Write) -> Result<()> {
+        write_bytes(writer, self)
+    }
+}
+
+// impl<T: Serializable> Serializable for [T] {
+//     fn serialize(&self, writer : &mut Write) -> Result<()> {
+//         try!((self.len() as u32).serialize(writer));
+//         for t in self {
+//             try!(t.serialize(writer));
+//         }
+//         Ok(())
+//     }
+// }
+
+impl<'a, T: Serializable> Serializable for [&'a T] {
+    fn serialize(&self, writer : &mut Write) -> Result<()> {
+        try!((self.len() as u32).serialize(writer));
+        for t in self {
+            try!(t.serialize(writer));
+        }
+        Ok(())
+    }
 }
