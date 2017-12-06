@@ -1,169 +1,201 @@
-// TODO
-// - use mio non blocking IO (mioco)
-// - rocksdb binding error handling could be better for get call?
-// - extract (de)serialization methods to separate file
-// - implement more asd methods
+// function to start contents of single thread
+// queue to accept new fds
+// from fd, make 'service'?
+// accepts commands such as PartialRead(Multi), sends sth back
 
-use std::io::prelude::*;
-use std::io::{Cursor};
-use std::net::{TcpListener, TcpStream};
+
+extern crate bytes;
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_io;
+// extern crate tokio_proto;
+// extern crate tokio_service;
+
+// step 1, implement some code
+// hoe? eerst commands definieren?
+
+
+use std::iter::Iterator;
 use std::thread;
-use std::sync::{Arc};
+use std::os::unix::io::FromRawFd;
 
-extern crate rocksdb;
-use rocksdb::{DB, Writable, WriteBatch};
+use futures::Sink;
+use futures::Stream;
 
-mod deser;
-use deser::*;
 
-fn prologue(mut stream: &mut TcpStream) -> Result<()> {
-    println!("1");
-    let magic = b"aLbA";
-    let magic1 = try!(deser::read_bytes_raw(stream, 4));
-    assert!(magic1 == magic);
-
-    println!("2");
-    let version = try!(deser::read_u32(stream));
-    assert!(version == 1);
-
-    println!("3");
-    let lido = try!(deser::read_bytes_option(stream));
-
-    let long_id = b"the_hardcoded_id";
-
-    match lido {
-        None => (),
-        Some(lid) =>
-            if lid == long_id {
-                ()
-            } else {
-                // TODO reply long id
-                assert!(false)
-            }
-    };
-
-    try!(deser::write_u32(stream, &0));
-    try!(deser::write_bytes(stream, long_id));
-    try!(stream.flush());
-
-    println!("5");
-    Ok(())
+#[derive(Debug)]
+enum ThreadCommand {
+    HandleFd(std::os::unix::io::RawFd),
 }
 
-enum AsdError {
-    UnknownOperation = 4
+pub struct PartialReadService {
+    thread_queues: Vec<futures::sync::mpsc::Sender<ThreadCommand>>,
+    next: usize, // rocksdb handle? or pass directly to threads...
 }
 
-fn reply_unknown(mut stream : &mut TcpStream) -> Result<()> {
-    println!("replying unknown!");
-    try!(deser::write_bytes(
-        stream,
-        &try!(deser::serialize(deser::write_u32,
-                               &(AsdError::UnknownOperation as u32)))));
-    try!(deser::write_u32(stream, &4));
-    try!(deser::write_u32(stream,
-                          &(AsdError::UnknownOperation as u32)));
-    try!(stream.flush());
-    Ok(())
-}
+mod protocol {
+    use std;
+    use tokio_io::codec::Decoder;
 
-#[macro_use] extern crate enum_primitive;
-extern crate num;
-use num::FromPrimitive;
 
-enum_from_primitive! {
-    enum Operation {
-        Range = 1,
-        MultiGet = 2
+    enum Request {
+        Version,
+        // PartialRead(String, Vec<(usize, usize)>),
     }
-}
 
-fn handle_multiget(mut stream: &mut TcpStream,
-                   mut cur: &mut Read,
-                   db: &DB) -> Result<()> {
-    let keys = try!(deser::read_bytes_list(&mut cur));
-    let mut res = Vec::with_capacity(keys.len());
-    // let db = db.snapshot();
-    // TODO snapshot meegeven in readoptions
-    // voor de get call (needs changes in the
-    // rocksdb binding...
-    // yak shaving here I come?
-
-    // also maybe provide a non atomic
-    // multiget variant
-    for key in keys {
-        res.push(match db.get(&key) {
-            Err(e) => panic!(e),
-            Ok(v) => v
-        });
-    };
-
-    let mut buf = Vec::new();
-    try!(deser::write_u32(&mut buf, &0));
-    // try!(deser::write_list(&mut buf,
-    //                        | writer, &rv | {
-    //                            deser::write_option(
-    //                                writer,
-    //                                deser::write_bytes,
-    //                                &rv)
-    //                        },
-    //                        &res2));
-
-    try!(deser::write_bytes(stream, &buf));
-    Ok(())
-}
-
-fn handle_client(mut stream: TcpStream, db: Arc<DB>) -> Result<()> {
-    // TODO wrap TcpStream with io::BufReader
-
-    try!(prologue(&mut stream));
-
-    println!("6");
-
-    loop {
-        let msg = try!(deser::read_bytes(&mut stream));
-        let mut cur = Cursor::new(msg);
-        println!("7");
-        let op = Operation::from_u8(try!(deser::read_u8(&mut cur)));
-        try!(match op {
-            None => reply_unknown(&mut stream),
-            Some(operation) =>
-                match operation {
-                    Operation::MultiGet =>
-                        handle_multiget(&mut stream,
-                                        &mut cur,
-                                        &*db),
-                    Operation::Range => reply_unknown(&mut stream)
-                }
-        });
-        let _ = db.put(b"my key", b"my key");
-        let _ = db.get(b"my key");
-        let batch = WriteBatch::new();
-        batch.put(b"key", b"value").unwrap();
-        db.write(batch).unwrap();
+    enum Error {
+        UnknownMessageType,
+        // DeserialisationError,
+        // KeyNotFound,
+        IoError(std::io::Error),
     }
-}
 
-fn main() {
-
-    let listener = TcpListener::bind("127.0.0.1:8090").unwrap();
-
-    let db = DB::open_default("/tmp/asd_rocks").unwrap();
-    let dbx = Arc::new(db);
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let dbx = dbx.clone();
-                thread::spawn(move|| {
-                    // connection succeeded
-                    println!("Hello, world!");
-                    handle_client(stream, dbx)
-                });
-            }
-            Err(_) => { /* connection failed */ }
+    impl std::convert::From<std::io::Error> for Error {
+        fn from(e: std::io::Error) -> Error {
+            Error::IoError(e)
         }
     }
 
-    drop(listener)
+    enum Response {
+        Version(String),
+        // PartialReadResult(Result<Vec<Option<Vec<u8>>>, Error>),
+    }
+
+    type RequestId = u64;
+
+    enum Message {
+        Notification,
+        Request(RequestId, Request),
+        Response(RequestId, Response),
+    }
+
+    struct MessageCodec;
+
+    use bytes::BytesMut;
+    use bytes::LittleEndian;
+    use bytes::IntoBuf;
+    use bytes::Buf;
+
+    fn get_varint<T>(buf: &mut T) -> u64
+        where T: Buf
+    {
+        let mut b = buf.get_u8();
+        let mut res: u64 = 0;
+        let mut shift = 0;
+        while b < 0x80 {
+            res += ((b & 0x7f) as u64) << shift;
+            b = buf.get_u8();
+            shift += 7;
+        }
+        res + (b << shift) as u64
+    }
+
+    impl Decoder for MessageCodec {
+        type Item = Message;
+        type Error = Error;
+
+
+        fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<(Message)>, Error> {
+            // message serialisation:
+            // - 4 bytes length
+            // - varint  type
+            // - payload depending on type
+
+            if buf.len() < 4 {
+                return Ok(None);
+            }
+
+            let length = buf[0..4].into_buf().get_u32::<LittleEndian>();
+            if buf.len() < (length as usize)
+            // + 4
+            {
+                return Ok(None);
+            }
+
+            // TODO consumeert die into_buf automatisch al nest bytes?
+            // ik ga er vanuit van niet...
+            // (to be seen once we can test it...)
+            // maybe start with implementing echo command first
+            let message_type = get_varint(&mut buf[..].into_buf());
+
+            let msg = match message_type {
+                // merde, gebruik hier capnproto ofzo?
+                // of iets van serde ? json berichten ;-)?
+                1 => Message::Notification,
+                2 => {
+                    let request_id = (&mut buf[..]).into_buf().get_u64::<LittleEndian>();
+                    // TODO deser payload
+                    Message::Request(request_id, Request::Version)
+                }
+                3 => {
+                    let request_id = (&mut buf[..]).into_buf().get_u64::<LittleEndian>();
+                    // TODO deser payload
+                    Message::Response(request_id, Response::Version("0.0.1".to_string()))
+                }
+                _ => return Result::Err(Error::UnknownMessageType),
+            };
+
+            Result::Ok(Option::Some(msg))
+        }
+    }
 }
+
+fn start_thread(queue: futures::sync::mpsc::Receiver<ThreadCommand>) -> () {
+    thread::spawn(move || {
+        // read from queue
+        // run event loop
+        // list for new handle_fd commands
+        // listen for partial read commands from fds
+        let mut reactor = tokio_core::reactor::Core::new().unwrap();
+        let handle = &reactor.handle();
+
+        let f = queue.for_each(|command| {
+            match command {
+                ThreadCommand::HandleFd(fd) => {
+                    let tcp_stream =
+                        tokio_core::net::TcpStream::from_stream(unsafe {
+                                                                    FromRawFd::from_raw_fd(fd)
+                                                                },
+                                                                handle)
+                            .unwrap();
+                    // TODO, listen for commands on this tcp_stream ..
+                    // tcp_stream.for_each ?
+                    // handle.spawn()
+
+                    // https://tokio.rs/docs/going-deeper-tokio/multiplex/
+                    // 1) transport
+                    // 2) protocol
+                    // 3) service ?!? -> hook that up with handle?
+
+                    futures::future::ok(())
+                }
+            }
+        });
+
+        reactor.run(f).unwrap();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn create_partial_read_service(count: usize) -> Box<PartialReadService> {
+    let mut thread_queues = Vec::new();
+    for _ in 1..count {
+        let (sender, receiver) = futures::sync::mpsc::channel(1);
+        start_thread(receiver);
+        thread_queues.push(sender);
+    }
+    Box::new(PartialReadService {
+        thread_queues: thread_queues,
+        next: 0,
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn handover_fd(service: PartialReadService, fd: std::os::unix::io::RawFd) -> () {
+    let index = service.next % service.thread_queues.len();
+    futures::sync::mpsc::Sender::wait(service.thread_queues.into_iter().nth(index).unwrap())
+        .send(ThreadCommand::HandleFd(fd))
+        .unwrap();
+}
+
+fn main() {}
